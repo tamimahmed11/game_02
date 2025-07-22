@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Grid Trap: Battle of Wits</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: #0e0e0e;
+      color: #fff;
+      text-align: center;
+    }
+    h1 {
+      color: #00f2ff;
+      margin-top: 20px;
+    }
+    #board {
+      display: grid;
+      grid-template-columns: repeat(8, 50px);
+      grid-gap: 3px;
+      justify-content: center;
+      margin-top: 20px;
+    }
+    .cell {
+      width: 50px;
+      height: 50px;
+      background-color: #1e1e1e;
+      border: 1px solid #444;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      cursor: pointer;
+      transition: background 0.3s;
+    }
+    .blocked {
+      background-color: #333;
+      cursor: not-allowed;
+    }
+    .p1 {
+      background-color: crimson;
+    }
+    .p2 {
+      background-color: royalblue;
+    }
+    #status {
+      margin-top: 20px;
+      font-size: 18px;
+    }
+    #reset {
+      margin-top: 15px;
+      padding: 10px 20px;
+      background-color: #00f2ff;
+      border: none;
+      border-radius: 5px;
+      font-size: 16px;
+      cursor: pointer;
+    }
+    #game-mode, #difficulty {
+      margin-top: 15px;
+      padding: 10px;
+      background-color: #4CAF50;
+      border: none;
+      border-radius: 5px;
+      font-size: 16px;
+      cursor: pointer;
+    }
+    .thinking {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0,0,0,0.7);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      font-size: 24px;
+      z-index: 100;
+    }
+    .controls {
+      display: flex;
+      justify-content: center;
+      gap: 10px;
+      margin-top: 15px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Grid Trap: Battle of Wits</h1>
+  <div class="controls">
+    <select id="game-mode">
+      <option value="human-ai">Human vs AI</option>
+      <option value="human-human">Human vs Human</option>
+    </select>
+    <select id="difficulty">
+      <option value="1">Easy (Random)</option>
+      <option value="2">Medium (Heuristic)</option>
+      <option value="3" selected>Hard (Minimax)</option>
+      <option value="4">Expert (Minimax with Pruning)</option>
+    </select>
+  </div>
+  <div id="board"></div>
+  <div id="status">🔴 Player 1's Turn</div>
+  <button id="reset">Restart</button>
+
+  <script>
+    // Game constants
+    const boardSize = 8;
+    const HUMAN = 1;
+    const AI = 2;
+    const HUMAN2 = 2; // For human vs human mode
+    const EMPTY = 0;
+    const BLOCKED = -1;
+    
+    // DOM elements
+    const board = document.getElementById("board");
+    const status = document.getElementById("status");
+    const reset = document.getElementById("reset");
+    const difficulty = document.getElementById("difficulty");
+    const gameMode = document.getElementById("game-mode");
+
+    // Game state
+    let grid = [];
+    let currentPlayer = HUMAN;
+    let positions = { [HUMAN]: [0, 0], [AI]: [7, 7], [HUMAN2]: [7, 7] };
+    let gameOver = false;
+    let computerThinking = false;
+    let isHumanVsHuman = false;
+    
+    // Directions: up, down, left, right
+    const dirs = [[1,0], [-1,0], [0,1], [0,-1]];
+
+    // Initialize the game board
+    function createBoard() {
+      board.innerHTML = "";
+      grid = Array.from({ length: boardSize }, () => Array(boardSize).fill(EMPTY));
+      
+      if (isHumanVsHuman) {
+        grid[0][0] = HUMAN;
+        grid[7][7] = HUMAN2;
+        positions[HUMAN] = [0, 0];
+        positions[HUMAN2] = [7, 7];
+      } else {
+        grid[0][0] = HUMAN;
+        grid[7][7] = AI;
+        positions[HUMAN] = [0, 0];
+        positions[AI] = [7, 7];
+      }
+
+      for (let r = 0; r < boardSize; r++) {
+        for (let c = 0; c < boardSize; c++) {
+          const cell = document.createElement("div");
+          cell.className = "cell";
+          cell.dataset.row = r;
+          cell.dataset.col = c;
+          updateCell(cell, r, c);
+          board.appendChild(cell);
+        }
+      }
+    }
+
+    // Update cell appearance and event listeners
+    function updateCell(cell, r, c) {
+      const value = grid[r][c];
+      cell.className = "cell";
+      if (value === BLOCKED) cell.classList.add("blocked");
+      else if (value === HUMAN) cell.classList.add("p1");
+      else if (value === AI || value === HUMAN2) cell.classList.add("p2");
+
+      cell.addEventListener("click", () => {
+        if (gameOver || computerThinking) return;
+        if (!isHumanVsHuman && currentPlayer === AI) return;
+        makeMove(r, c);
+      });
+    }
+
+    // Main move handling function
+    function makeMove(r, c) {
+      const player = currentPlayer;
+      const [cr, cc] = positions[player];
+      const dist = Math.abs(cr - r) + Math.abs(cc - c);
+
+      // Validate move
+      if (dist !== 1 || grid[r][c] !== EMPTY) return;
+
+      // Execute move
+      grid[cr][cc] = BLOCKED;
+      grid[r][c] = player;
+      positions[player] = [r, c];
+      
+      updateBoard();
+
+      // Check if game is over
+      const nextPlayer = player === HUMAN ? (isHumanVsHuman ? HUMAN2 : AI) : HUMAN;
+      if (!hasValidMoves(nextPlayer)) {
+        if (!hasValidMoves(player)) {
+          status.textContent = "😐 It's a draw!";
+        } else {
+          status.textContent = player === HUMAN ? "🎉 Player 1 Wins!" : 
+                             isHumanVsHuman ? "🎉 Player 2 Wins!" : "🤖 AI Wins!";
+        }
+        gameOver = true;
+        return;
+      }
+
+      // Switch turns
+      currentPlayer = nextPlayer;
+      updateStatusText();
+
+      // AI move (if in human vs AI mode and it's AI's turn)
+      if (!isHumanVsHuman && currentPlayer === AI && !gameOver) {
+        computerThinking = true;
+        setTimeout(aiMove, 100); // Small delay for UI responsiveness
+      }
+    }
+
+    function updateStatusText() {
+      if (isHumanVsHuman) {
+        status.textContent = currentPlayer === HUMAN ? "🔴 Player 1's Turn" : "🔵 Player 2's Turn";
+      } else {
+        status.textContent = currentPlayer === HUMAN ? "🔴 Your Turn (Player 1)" : "🤖 AI is thinking...";
+      }
+    }
+
+    // AI move logic based on difficulty
+    function aiMove() {
+      showThinkingIndicator(true);
+      
+      setTimeout(() => {
+        let move = null;
+        const diff = parseInt(difficulty.value);
+        
+        switch(diff) {
+          case 1: // Easy - Random moves
+            move = getRandomMove();
+            break;
+          case 2: // Medium - Heuristic based
+            move = getHeuristicMove();
+            break;
+          case 3: // Hard - Minimax
+            move = getMinimaxMove(3); // Depth 3
+            break;
+          case 4: // Expert - Minimax with alpha-beta pruning
+            move = getMinimaxMoveWithPruning(4); // Depth 4
+            break;
+        }
+
+        if (move) {
+          makeMove(move[0], move[1]);
+        }
+        
+        showThinkingIndicator(false);
+        computerThinking = false;
+      }, 100);
+    }
+
+    // Random move AI (Easy)
+    function getRandomMove() {
+      const [r, c] = positions[AI];
+      const possibleMoves = [];
+      
+      dirs.forEach(([dr, dc]) => {
+        const nr = r + dr, nc = c + dc;
+        if (isValidMove(nr, nc)) {
+          possibleMoves.push([nr, nc]);
+        }
+      });
+      
+      return possibleMoves.length > 0 
+        ? possibleMoves[Math.floor(Math.random() * possibleMoves.length)]
+        : null;
+    }
+
+    // Heuristic based AI (Medium)
+    function getHeuristicMove() {
+      const [r, c] = positions[AI];
+      const moves = [];
+      
+      // Heuristic weights
+      const centerWeight = (nr, nc) => {
+        const center = boardSize / 2 - 0.5;
+        const dist = Math.sqrt(Math.pow(nr - center, 2) + Math.pow(nc - center, 2));
+        return 1 / (dist + 1);
+      };
+
+      const blockingWeight = (nr, nc) => {
+        let weight = 0;
+        dirs.forEach(([dr, dc]) => {
+          const or = nr + dr, oc = nc + dc;
+          if (or >= 0 && or < boardSize && oc >= 0 && oc < boardSize && grid[or][oc] === HUMAN) {
+            weight += 0.3;
+          }
+        });
+        return weight;
+      };
+
+      const mobilityWeight = (nr, nc) => {
+        let futureMoves = 0;
+        dirs.forEach(([dr, dc]) => {
+          const fr = nr + dr, fc = nc + dc;
+          if (isValidMove(fr, fc)) {
+            futureMoves++;
+          }
+        });
+        return futureMoves * 0.2;
+      };
+
+      // Evaluate all possible moves
+      dirs.forEach(([dr, dc]) => {
+        const nr = r + dr, nc = c + dc;
+        if (isValidMove(nr, nc)) {
+          let weight = centerWeight(nr, nc) + blockingWeight(nr, nc) + mobilityWeight(nr, nc);
+          moves.push({ move: [nr, nc], weight });
+        }
+      });
+
+      if (moves.length === 0) return null;
+
+      // Select move with highest weight
+      moves.sort((a, b) => b.weight - a.weight);
+      return moves[0].move;
+    }
+
+    // Minimax AI (Hard)
+    function getMinimaxMove(depth) {
+      let bestScore = -Infinity;
+      let bestMove = null;
+      const [r, c] = positions[AI];
+      
+      dirs.forEach(([dr, dc]) => {
+        const nr = r + dr, nc = c + dc;
+        if (isValidMove(nr, nc)) {
+          // Make the move temporarily
+          const oldPos = positions[AI];
+          grid[oldPos[0]][oldPos[1]] = BLOCKED;
+          grid[nr][nc] = AI;
+          positions[AI] = [nr, nc];
+          
+          const score = minimax(depth - 1, false);
+          
+          // Undo the move
+          grid[nr][nc] = EMPTY;
+          grid[oldPos[0]][oldPos[1]] = AI;
+          positions[AI] = oldPos;
+          
+          if (score > bestScore) {
+            bestScore = score;
+            bestMove = [nr, nc];
+          }
+        }
+      });
+      
+      return bestMove;
+    }
+
+    // Minimax with alpha-beta pruning (Expert)
+    function getMinimaxMoveWithPruning(depth) {
+      let bestScore = -Infinity;
+      let bestMove = null;
+      let alpha = -Infinity;
+      let beta = Infinity;
+      const [r, c] = positions[AI];
+      
+      dirs.forEach(([dr, dc]) => {
+        const nr = r + dr, nc = c + dc;
+        if (isValidMove(nr, nc)) {
+          // Make the move temporarily
+          const oldPos = positions[AI];
+          grid[oldPos[0]][oldPos[1]] = BLOCKED;
+          grid[nr][nc] = AI;
+          positions[AI] = [nr, nc];
+          
+          const score = minimaxWithPruning(depth - 1, false, alpha, beta);
+          
+          // Undo the move
+          grid[nr][nc] = EMPTY;
+          grid[oldPos[0]][oldPos[1]] = AI;
+          positions[AI] = oldPos;
+          
+          if (score > bestScore) {
+            bestScore = score;
+            bestMove = [nr, nc];
+          }
+          
+          alpha = Math.max(alpha, bestScore);
+          if (beta <= alpha) return; // Prune
+        }
+      });
+      
+      return bestMove;
+    }
+
+    // Core minimax algorithm
+    function minimax(depth, isMaximizing) {
+      if (depth === 0 || isGameOver()) {
+        return evaluateBoard();
+      }
+
+      const player = isMaximizing ? AI : HUMAN;
+      const [r, c] = positions[player];
+      let bestScore = isMaximizing ? -Infinity : Infinity;
+      
+      dirs.forEach(([dr, dc]) => {
+        const nr = r + dr, nc = c + dc;
+        if (isValidMove(nr, nc)) {
+          // Make the move temporarily
+          const oldPos = positions[player];
+          grid[oldPos[0]][oldPos[1]] = BLOCKED;
+          grid[nr][nc] = player;
+          positions[player] = [nr, nc];
+          
+          const score = minimax(depth - 1, !isMaximizing);
+          
+          // Undo the move
+          grid[nr][nc] = EMPTY;
+          grid[oldPos[0]][oldPos[1]] = player;
+          positions[player] = oldPos;
+          
+          bestScore = isMaximizing 
+            ? Math.max(score, bestScore)
+            : Math.min(score, bestScore);
+        }
+      });
+      
+      return bestScore;
+    }
+
+    // Minimax with alpha-beta pruning
+    function minimaxWithPruning(depth, isMaximizing, alpha, beta) {
+      if (depth === 0 || isGameOver()) {
+        return evaluateBoard();
+      }
+
+      const player = isMaximizing ? AI : HUMAN;
+      const [r, c] = positions[player];
+      let bestScore = isMaximizing ? -Infinity : Infinity;
+      
+      dirs.forEach(([dr, dc]) => {
+        const nr = r + dr, nc = c + dc;
+        if (isValidMove(nr, nc)) {
+          // Make the move temporarily
+          const oldPos = positions[player];
+          grid[oldPos[0]][oldPos[1]] = BLOCKED;
+          grid[nr][nc] = player;
+          positions[player] = [nr, nc];
+          
+          const score = minimaxWithPruning(depth - 1, !isMaximizing, alpha, beta);
+          
+          // Undo the move
+          grid[nr][nc] = EMPTY;
+          grid[oldPos[0]][oldPos[1]] = player;
+          positions[player] = oldPos;
+          
+          if (isMaximizing) {
+            bestScore = Math.max(score, bestScore);
+            alpha = Math.max(alpha, bestScore);
+          } else {
+            bestScore = Math.min(score, bestScore);
+            beta = Math.min(beta, bestScore);
+          }
+          
+          if (beta <= alpha) return; // Prune
+        }
+      });
+      
+      return bestScore;
+    }
+
+    // Board evaluation function
+    function evaluateBoard() {
+      const aiMoves = countValidMoves(AI);
+      const humanMoves = countValidMoves(HUMAN);
+      
+      // If game is over
+      if (humanMoves === 0) return aiMoves === 0 ? 0 : 1000; // AI wins
+      if (aiMoves === 0) return -1000; // Human wins
+      
+      // Mobility difference
+      let score = (aiMoves - humanMoves) * 10;
+      
+      // Center control
+      const center = boardSize / 2 - 0.5;
+      const aiDist = Math.sqrt(
+        Math.pow(positions[AI][0] - center, 2) + 
+        Math.pow(positions[AI][1] - center, 2)
+      );
+      const humanDist = Math.sqrt(
+        Math.pow(positions[HUMAN][0] - center, 2) + 
+        Math.pow(positions[HUMAN][1] - center, 2)
+      );
+      score += (humanDist - aiDist) * 5;
+      
+      return score;
+    }
+
+    // Helper functions
+    function isValidMove(r, c) {
+      return r >= 0 && r < boardSize && c >= 0 && c < boardSize && grid[r][c] === EMPTY;
+    }
+
+    function hasValidMoves(player) {
+      const [r, c] = positions[player];
+      return dirs.some(([dr, dc]) => {
+        const nr = r + dr, nc = c + dc;
+        return isValidMove(nr, nc);
+      });
+    }
+
+    function countValidMoves(player) {
+      const [r, c] = positions[player];
+      let count = 0;
+      dirs.forEach(([dr, dc]) => {
+        const nr = r + dr, nc = c + dc;
+        if (isValidMove(nr, nc)) count++;
+      });
+      return count;
+    }
+
+    function isGameOver() {
+      return !hasValidMoves(HUMAN) || (isHumanVsHuman ? !hasValidMoves(HUMAN2) : !hasValidMoves(AI));
+    }
+
+    function updateBoard() {
+      const cells = board.querySelectorAll(".cell");
+      cells.forEach(cell => {
+        const r = parseInt(cell.dataset.row);
+        const c = parseInt(cell.dataset.col);
+        updateCell(cell, r, c);
+      });
+    }
+
+    function showThinkingIndicator(show) {
+      let indicator = document.querySelector('.thinking');
+      if (show) {
+        if (!indicator) {
+          indicator = document.createElement('div');
+          indicator.className = 'thinking';
+          indicator.textContent = '🤖 AI is thinking...';
+          document.body.appendChild(indicator);
+        }
+      } else {
+        if (indicator) {
+          indicator.remove();
+        }
+      }
+    }
+
+    // Event listeners
+    reset.addEventListener("click", () => {
+      resetGame();
+    });
+
+    gameMode.addEventListener("change", () => {
+      isHumanVsHuman = gameMode.value === "human-human";
+      resetGame();
+    });
+
+    function resetGame() {
+      positions = { [HUMAN]: [0, 0], [AI]: [7, 7], [HUMAN2]: [7, 7] };
+      currentPlayer = HUMAN;
+      gameOver = false;
+      computerThinking = false;
+      updateStatusText();
+      createBoard();
+    }
+
+    // Initialize game
+    isHumanVsHuman = gameMode.value === "human-human";
+    resetGame();
+  </script>
+</body>
+</html>
